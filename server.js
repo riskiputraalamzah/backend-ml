@@ -1,22 +1,20 @@
 const express = require("express");
 const multer = require("multer");
 const tf = require("@tensorflow/tfjs-node");
-const fs = require("fs");
-const path = require("path");
 const cors = require("cors");
 const { Storage } = require("@google-cloud/storage");
-const admin = require("firebase-admin");
+const { Firestore } = require("@google-cloud/firestore"); // Import Firestore
 
 const app = express();
 const port = 3000;
 
 app.use(cors());
 
-// Inisialisasi Firebase Admin SDK
-admin.initializeApp({
-  credential: admin.credential.cert("firebase-credentials.json"), // Ganti dengan path ke credentials Firebase
+// Inisialisasi Google Cloud Firestore
+const firestore = new Firestore({
+  keyFilename: "credentials.json", // Ganti dengan path ke credentials Google Cloud Anda
 });
-const db = admin.firestore();
+const db = firestore; // Gunakan db untuk mengakses Firestore
 
 // Setup Multer untuk menangani upload file
 const storage = multer.memoryStorage(); // Menyimpan file dalam memori
@@ -34,7 +32,7 @@ const bucketName = "your-bucket-name"; // Ganti dengan nama bucket Anda
 let model;
 async function loadModelFromGCS() {
   try {
-    const file = gcs.bucket(bucketName).file("model/model.json"); // Path ke file model di GCS
+    const file = gcs.bucket(bucketName).file("/submissions-model/model.json"); // Path ke file model di GCS
     const modelBuffer = await file.download();
     model = await tf.loadGraphModel(tf.io.fromMemory(modelBuffer));
     console.log("Model loaded from Google Cloud Storage");
@@ -152,6 +150,17 @@ function generateUUID() {
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+// Fungsi untuk menyimpan hasil prediksi ke Firestore
+async function savePredictionToFirestore(resultData) {
+  try {
+    await db.collection("predictions").add(resultData);
+    console.log("Prediction saved to Firestore!");
+  } catch (error) {
+    console.error("Error saving prediction to Firestore:", error);
+    throw new Error("Failed to save prediction.");
+  }
 }
 
 // Menangani error file terlalu besar (lebih dari 1MB)
