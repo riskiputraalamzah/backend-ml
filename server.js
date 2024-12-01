@@ -3,9 +3,20 @@ const multer = require("multer");
 const tf = require("@tensorflow/tfjs-node");
 const fs = require("fs");
 const path = require("path");
+const cors = require("cors");
+const { Storage } = require("@google-cloud/storage");
+const admin = require("firebase-admin");
 
 const app = express();
 const port = 3000;
+
+app.use(cors());
+
+// Inisialisasi Firebase Admin SDK
+admin.initializeApp({
+  credential: admin.credential.cert("firebase-credentials.json"), // Ganti dengan path ke credentials Firebase
+});
+const db = admin.firestore();
 
 // Setup Multer untuk menangani upload file
 const storage = multer.memoryStorage(); // Menyimpan file dalam memori
@@ -14,20 +25,26 @@ const upload = multer({
   limits: { fileSize: 1000000 }, // Membatasi ukuran file menjadi 1MB
 });
 
-// Fungsi untuk memuat model TensorFlow
-let model;
+const gcs = new Storage({
+  keyFilename: "credentials.json", // Ganti dengan path ke credentials Google Cloud
+});
+const bucketName = "your-bucket-name"; // Ganti dengan nama bucket Anda
 
-async function loadModel() {
+// Fungsi untuk memuat model TensorFlow dari Google Cloud Storage
+let model;
+async function loadModelFromGCS() {
   try {
-    model = await tf.loadGraphModel("file://submissions-model/model.json");
-    console.log("Model loaded");
+    const file = gcs.bucket(bucketName).file("model/model.json"); // Path ke file model di GCS
+    const modelBuffer = await file.download();
+    model = await tf.loadGraphModel(tf.io.fromMemory(modelBuffer));
+    console.log("Model loaded from Google Cloud Storage");
   } catch (error) {
-    console.error("Error loading model: ", error);
+    console.error("Error loading model from GCS: ", error);
     throw new Error("Failed to load model.");
   }
 }
 
-loadModel(); // Memuat model saat aplikasi dimulai
+loadModelFromGCS(); // Memuat model saat aplikasi dimulai
 
 // Endpoint untuk menerima gambar dan melakukan prediksi
 app.post("/predict", upload.single("image"), async (req, res) => {
@@ -62,12 +79,6 @@ app.post("/predict", upload.single("image"), async (req, res) => {
     // Normalisasi gambar ke rentang [0, 1]
     imageTensor = imageTensor.div(255.0);
 
-    // Cek shape tensor setelah resize dan normalisasi
-    console.log(
-      "Image Tensor shape after resize and normalization: ",
-      imageTensor.shape
-    );
-
     // Memastikan tensor memiliki dimensi yang benar
     if (imageTensor.shape.length === 3) {
       imageTensor = imageTensor.expandDims(0); // Tambahkan batch dimension
@@ -75,24 +86,16 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 
     // Lakukan prediksi menggunakan model
     const prediction = model.predict(imageTensor);
-
-    // Ambil hasil prediksi berupa array dengan rentang nilai [0, 1]
     const predictionData = prediction.dataSync();
     const predictedValue = parseFloat(predictionData[0].toFixed(3));
 
-    console.log("Prediction Data: ", predictionData[0]); // Debugging hasil prediksi
-    console.log("Prediction Data: ", predictedValue); // Debugging hasil prediksi
-
     // Prediksi pertama (misalnya untuk "Cancer")
     const result = predictedValue > 0.58 ? "Cancer" : "Non-cancer";
-
-    // Tentukan saran berdasarkan hasil prediksi
     const suggestion =
       result === "Cancer"
         ? "Segera periksa ke dokter!"
         : "Penyakit kanker tidak terdeteksi.";
 
-    // Simpan hasil prediksi ke file lokal (JSON)
     const resultData = {
       id: generateUUID(),
       result: result,
@@ -100,13 +103,8 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    // Simpan ke file JSON lokal
-    const filePath = path.join(__dirname, "predictions.json");
-    const predictions = fs.existsSync(filePath)
-      ? JSON.parse(fs.readFileSync(filePath))
-      : [];
-    predictions.push(resultData);
-    fs.writeFileSync(filePath, JSON.stringify(predictions, null, 2));
+    // Simpan hasil prediksi ke Firestore
+    await savePredictionToFirestore(resultData);
 
     // Kembalikan response ke pengguna
     res.json({
@@ -126,32 +124,18 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 // Endpoint untuk mendapatkan riwayat prediksi
 app.get("/predict/histories", async (req, res) => {
   try {
-    const filePath = path.join(__dirname, "predictions.json");
+    const predictionsRef = db.collection("predictions");
+    const snapshot = await predictionsRef.get();
 
-    if (fs.existsSync(filePath)) {
-      const predictions = JSON.parse(fs.readFileSync(filePath));
+    const formattedPredictions = snapshot.docs.map((doc) => ({
+      id: doc.id,
+      history: doc.data(),
+    }));
 
-      // Format data sesuai dengan ketentuan
-      const formattedPredictions = predictions.map((prediction) => ({
-        id: prediction.id,
-        history: {
-          result: prediction.result,
-          createdAt: prediction.createdAt,
-          suggestion: prediction.suggestion,
-          id: prediction.id,
-        },
-      }));
-
-      res.json({
-        status: "success",
-        data: formattedPredictions,
-      });
-    } else {
-      res.json({
-        status: "success",
-        data: [],
-      });
-    }
+    res.json({
+      status: "success",
+      data: formattedPredictions,
+    });
   } catch (error) {
     console.error("Error fetching histories:", error);
     res.status(500).json({
