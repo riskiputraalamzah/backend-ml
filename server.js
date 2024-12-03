@@ -153,7 +153,7 @@ function generateUUID() {
 // Fungsi untuk menyimpan hasil prediksi ke Firestore
 async function savePredictionToFirestore(resultData) {
   try {
-    await db.collection("predictions").add(resultData);
+    await db.collection("predictions").doc(resultData.id).set(resultData);
     console.log("Prediction saved to Firestore!");
   } catch (error) {
     console.error("Error saving prediction to Firestore:", error);
