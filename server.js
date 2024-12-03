@@ -23,18 +23,16 @@ const upload = multer({
   limits: { fileSize: 1000000 }, // Membatasi ukuran file menjadi 1MB
 });
 
-const gcs = new Storage({
-  keyFilename: "credentials.json", // Ganti dengan path ke credentials Google Cloud
-});
-const bucketName = "your-bucket-name"; // Ganti dengan nama bucket Anda
+// const gcs = new Storage({
+//   keyFilename: "credentials.json", // Ganti dengan path ke credentials Google Cloud
+// });
+// const bucketName = "your-bucket-name"; // Ganti dengan nama bucket Anda
 
 // Fungsi untuk memuat model TensorFlow dari Google Cloud Storage
 let model;
 async function loadModelFromGCS() {
   try {
-    const file = gcs.bucket(bucketName).file("/submissions-model/model.json"); // Path ke file model di GCS
-    const modelBuffer = await file.download();
-    model = await tf.loadGraphModel(tf.io.fromMemory(modelBuffer));
+    model = await tf.loadGraphModel("file://submission-model/model.json"); // sesuaikan dengan url public gcs
     console.log("Model loaded from Google Cloud Storage");
   } catch (error) {
     console.error("Error loading model from GCS: ", error);
@@ -105,7 +103,7 @@ app.post("/predict", upload.single("image"), async (req, res) => {
     await savePredictionToFirestore(resultData);
 
     // Kembalikan response ke pengguna
-    res.json({
+    res.status(201).json({
       status: "success",
       message: "Model is predicted successfully",
       data: resultData,
